@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body{font-family:Arial,sans-serif;background:#f5f7fb;margin:0;color:#1f2937}
+    .wrap{max-width:900px;margin:0 auto;padding:28px 18px}
+    .card{background:#fff;border-radius:16px;padding:26px;box-shadow:0 4px 18px rgba(0,0,0,.08)}
+    h1{margin:0 0 8px;font-size:26px}.muted{color:#6b7280}
+    label{display:block;font-weight:600;margin:16px 0 7px}
+    input{width:100%;box-sizing:border-box;padding:12px;border:1px solid #d1d5db;border-radius:10px;font-size:16px}
+    button{border:0;border-radius:10px;padding:12px 18px;font-size:16px;font-weight:700;cursor:pointer}
+    .primary{background:#111827;color:#fff}.danger{background:#b91c1c;color:#fff}
+    .timer{position:sticky;top:10px;background:#111827;color:#fff;padding:12px 16px;border-radius:12px;text-align:center;font-weight:800;font-size:20px;margin-bottom:16px;z-index:5}
+    .timer.warning{background:#b45309}.timer.danger{background:#b91c1c}
+    .q{border:1px solid #e5e7eb;border-radius:12px;padding:18px;margin:14px 0}
+    .qtitle{font-weight:700;margin-bottom:12px}.opt{display:block;padding:9px 10px;margin:6px 0;border-radius:8px}
+    .opt:hover{background:#f3f4f6}.actions{display:flex;gap:10px;align-items:center;justify-content:space-between;margin-top:20px}
+    .hidden{display:none}.notice{padding:12px;border-radius:10px;background:#fff7ed;margin:12px 0}
+    .result{text-align:center}.score{font-size:48px;font-weight:900;margin:12px 0}.error{color:#b91c1c;font-weight:600;margin-top:10px}
+    .lock{padding:14px;border-radius:10px;background:#fee2e2;color:#991b1b;margin:12px 0;font-weight:600}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div id="startCard" class="card">
+    <h1>Kuis ACC – Full & Variable Costing</h1>
+    <p class="muted">15 soal pilihan ganda • waktu 5 menit • nilai maksimal 100</p>
+    <div class="notice"><b>Perhatian:</b> setelah kuis dimulai, meninggalkan halaman akan dicatat sebagai <b>KELUAR DARI UJIAN</b> dan nilai otomatis <b>0</b>. Setiap NIM hanya boleh memiliki satu sesi aktif.</div>
+    <label for="name">Nama lengkap</label>
+    <input id="name" autocomplete="name" placeholder="Masukkan nama">
+    <label for="nim">NIM</label>
+    <input id="nim" autocomplete="off" placeholder="Masukkan NIM">
+    <div class="actions"><span id="startError" class="error"></span><button class="primary" onclick="start()">Mulai Kuis</button></div>
+  </div>
+
+  <div id="examCard" class="hidden">
+    <div id="timer" class="timer">05:00</div>
+    <div class="card">
+      <h1>Kuis Sedang Berlangsung</h1>
+      <p class="muted">Jawab semua soal. Pilihan soal dan opsi diacak.</p>
+      <div class="notice"><b>Jangan menutup, me-refresh, atau meninggalkan halaman.</b> Jika sesi ditinggalkan, sesi akan ditutup dan nilainya 0.</div>
+      <div id="lockMsg" class="lock hidden"></div>
+      <form id="examForm"></form>
+      <div class="actions">
+        <span class="muted">Pastikan semua jawaban sudah diperiksa.</span>
+        <button type="button" class="primary" onclick="submitExam(false)">Kumpulkan Jawaban</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="resultCard" class="hidden card result">
+    <h1>Hasil Ujian</h1>
+    <div id="statusText" class="muted"></div>
+    <div id="score" class="score">0</div>
+    <p id="detail"></p>
+  </div>
+</div>
+
+<script>
+let sessionId=null, questions=[], startedAt=0, durationMs=15*60*1000;
+let timerHandle=null, heartbeatHandle=null, finished=false, leavingSent=false, hiddenTimer=null;
+
+function start(){
+  const name=document.getElementById('name').value.trim();
+  const nim=document.getElementById('nim').value.trim();
+  const err=document.getElementById('startError'); err.textContent='';
+  if(!name||!nim){err.textContent='Nama dan NIM wajib diisi.';return;}
+  google.script.run.withSuccessHandler(data=>{
+    sessionId=data.sessionId;questions=data.questions;startedAt=data.startedAt;durationMs=data.durationMs;
+    renderExam();document.getElementById('startCard').classList.add('hidden');document.getElementById('examCard').classList.remove('hidden');
+    timerHandle=setInterval(updateTimer,250);heartbeatHandle=setInterval(sendHeartbeat,5000);updateTimer();
+    history.pushState({exam:true},'',location.href);
+  }).withFailureHandler(e=>{err.textContent=e.message||String(e);}).startExam(name,nim);
+}
+
+function renderExam(){
+  const form=document.getElementById('examForm');form.innerHTML='';
+  questions.forEach((q,idx)=>{
+    const box=document.createElement('div');box.className='q';
+    let h='<div class="qtitle">'+(idx+1)+'. '+escapeHtml(q.q)+'</div>';
+    q.o.forEach((opt,i)=>{const letter=String.fromCharCode(65+i);h+='<label class="opt"><input required type="radio" name="q'+q.id+'" value="'+i+'"> <b>'+letter+'.</b> '+escapeHtml(opt)+'</label>';});
+    box.innerHTML=h;form.appendChild(box);
+  });
+}
+
+function updateTimer(){
+  if(finished)return;
+  const left=Math.max(0,durationMs-(Date.now()-startedAt)),sec=Math.ceil(left/1000),m=Math.floor(sec/60),s=sec%60;
+  const el=document.getElementById('timer');el.textContent=String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
+  el.classList.toggle('warning',left<=5*60*1000&&left>60*1000);el.classList.toggle('danger',left<=60*1000);
+  if(left<=0){clearInterval(timerHandle);clearInterval(heartbeatHandle);submitExam(true);}
+}
+
+function sendHeartbeat(){
+  if(!sessionId||finished)return;
+  google.script.run.withSuccessHandler(r=>{
+    if(!r.ok && !finished) forceClosed(r.reason||'Sesi sudah ditutup.');
+  }).withFailureHandler(()=>{}).heartbeat(sessionId);
+}
+
+function collectAnswers(){
+  const answers=[];
+  questions.forEach(q=>{
+    const chosen=document.querySelector('input[name="q'+q.id+'"]:checked');
+    answers.push({id:q.id,answer:chosen?Number(chosen.value):-1});
+  });
+  return answers;
+}
+
+function submitExam(auto){
+  if(finished)return;
+  if(!auto && !document.getElementById('examForm').checkValidity()){
+    document.getElementById('examForm').reportValidity();return;
+  }
+  const answers=collectAnswers();finished=true;clearInterval(timerHandle);clearInterval(heartbeatHandle);clearTimeout(hiddenTimer);
+  google.script.run.withSuccessHandler(showResult).withFailureHandler(e=>{finished=false;alert(e.message||String(e));}).submitExam(sessionId,answers);
+}
+
+function forceClosed(reason){
+  if(finished)return;
+  finished=true;clearInterval(timerHandle);clearInterval(heartbeatHandle);clearTimeout(hiddenTimer);
+  document.getElementById('examCard').classList.add('hidden');document.getElementById('resultCard').classList.remove('hidden');
+  document.getElementById('statusText').textContent='KELUAR DARI UJIAN';document.getElementById('score').textContent='0';
+  document.getElementById('detail').textContent=reason;
+}
+
+function showResult(r){
+  document.getElementById('examCard').classList.add('hidden');document.getElementById('resultCard').classList.remove('hidden');
+  document.getElementById('statusText').textContent=r.status;document.getElementById('score').textContent=r.score;
+  document.getElementById('detail').textContent='Benar: '+r.correct+' • Salah/tidak dijawab: '+r.wrong+' • Durasi: '+r.durationSec+' detik';
+}
+
+function sendExit(){
+  if(!sessionId||finished||leavingSent)return;
+  leavingSent=true;
+  const payload=JSON.stringify({action:'exit',sessionId:sessionId});
+  try{
+    const blob=new Blob([payload],{type:'application/json'});
+    if(!navigator.sendBeacon(location.href,blob)){
+      fetch(location.href,{method:'POST',headers:{'Content-Type':'application/json'},body:payload,keepalive:true}).catch(()=>{});
+    }
+  }catch(e){}
+}
+
+window.addEventListener('beforeunload',e=>{
+  if(sessionId&&!finished){sendExit();e.preventDefault();e.returnValue='Ujian sedang berlangsung. Jika Anda keluar, nilai akan menjadi 0.';}
+});
+window.addEventListener('pagehide',sendExit);
+
+document.addEventListener('visibilitychange',()=>{
+  if(!sessionId||finished)return;
+  if(document.visibilityState==='hidden'){
+    hiddenTimer=setTimeout(()=>{
+      if(document.visibilityState==='hidden'){sendExit();forceClosed('Halaman ditinggalkan. Sesi ujian ditutup dan nilai 0.');}
+    },5000);
+  }else{clearTimeout(hiddenTimer);}
+});
+
+window.addEventListener('popstate',()=>{
+  if(sessionId&&!finished){
+    history.pushState({exam:true},'',location.href);
+    sendExit();forceClosed('Anda mencoba meninggalkan halaman ujian. Sesi ditutup dan nilai 0.');
+  }
+});
+
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));}
+</script>
+</body>
+</html>
